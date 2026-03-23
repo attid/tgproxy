@@ -26,6 +26,23 @@ type Config struct {
 	UpstreamBaseURL string
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(body []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(body)
+}
+
 func loadConfigFromEnv() (Config, error) {
 	allowedBotIDs := parseAllowedBotIDs(os.Getenv("ALLOWED_BOT_IDS"))
 	if len(allowedBotIDs) == 0 {
@@ -97,24 +114,38 @@ func newServer(cfg Config) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		redactedPath := redactBotPath(r.URL.Path)
+
 		if r.URL.Path == "/healthz" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
+			log.Printf("request health status=200 method=%s path=%s duration=%s", r.Method, redactedPath, time.Since(start).Round(time.Millisecond))
 			return
 		}
 
 		botID, ok := extractBotID(r.URL.Path)
 		if !ok {
 			http.Error(w, "invalid bot path", http.StatusBadRequest)
+			log.Printf("request rejected status=400 method=%s path=%s reason=invalid_bot_path duration=%s", r.Method, redactedPath, time.Since(start).Round(time.Millisecond))
 			return
 		}
 
 		if _, allowed := cfg.AllowedBotIDs[botID]; !allowed {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			log.Printf("request rejected status=403 method=%s bot_id=%s path=%s reason=bot_id_not_allowed duration=%s", r.Method, botID, redactedPath, time.Since(start).Round(time.Millisecond))
 			return
 		}
 
-		proxy.ServeHTTP(w, r)
+		recorder := &statusRecorder{ResponseWriter: w}
+		proxy.ServeHTTP(recorder, r)
+
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+
+		log.Printf("request proxied status=%d method=%s bot_id=%s path=%s duration=%s", status, r.Method, botID, redactedPath, time.Since(start).Round(time.Millisecond))
 	})
 }
 
@@ -141,6 +172,25 @@ func extractBotID(path string) (string, bool) {
 	}
 
 	return botID, true
+}
+
+func redactBotPath(path string) string {
+	if !strings.HasPrefix(path, "/bot") {
+		return path
+	}
+
+	rest := strings.TrimPrefix(path, "/bot")
+	token, suffix, ok := strings.Cut(rest, "/")
+	if !ok || token == "" {
+		return "/bot<redacted>"
+	}
+
+	botID, secret, hasSecret := strings.Cut(token, ":")
+	if hasSecret && botID != "" && secret != "" {
+		return "/bot" + botID + ":<redacted>/" + suffix
+	}
+
+	return "/bot<redacted>/" + suffix
 }
 
 func main() {

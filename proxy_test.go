@@ -313,3 +313,35 @@ func TestHealthcheckURLFromEnvDefaults(t *testing.T) {
 		t.Fatalf("unexpected default healthcheck url %q", got)
 	}
 }
+
+func TestRedactBotPathValidToken(t *testing.T) {
+	t.Parallel()
+
+	got := redactBotPath("/bot123456:super-secret/getMe")
+	want := "/bot123456:<redacted>/getMe"
+
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRedactBotPathMalformedToken(t *testing.T) {
+	t.Parallel()
+
+	got := redactBotPath("/botbadtoken/getMe")
+	want := "/bot<redacted>/getMe"
+
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRedactBotPathNonBotPath(t *testing.T) {
+	t.Parallel()
+
+	got := redactBotPath("/healthz")
+
+	if got != "/healthz" {
+		t.Fatalf("expected /healthz, got %q", got)
+	}
+}
