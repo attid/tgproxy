@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 const (
 	defaultListenAddr      = ":8080"
 	defaultUpstreamBaseURL = "https://api.telegram.org"
+	defaultHealthcheckURL  = "http://127.0.0.1:8080/healthz"
 )
 
 type Config struct {
@@ -141,6 +144,13 @@ func extractBotID(path string) (string, bool) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := runHealthcheck(healthcheckURLFromEnv()); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	cfg, err := loadConfigFromEnv()
 	if err != nil {
 		log.Fatal(err)
@@ -154,4 +164,33 @@ func main() {
 
 	log.Printf("listening on %s", cfg.ListenAddr)
 	log.Fatal(server.ListenAndServe())
+}
+
+func healthcheckURLFromEnv() string {
+	raw := strings.TrimSpace(os.Getenv("HEALTHCHECK_URL"))
+	if raw == "" {
+		return defaultHealthcheckURL
+	}
+	return raw
+}
+
+func runHealthcheck(target string) error {
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return fmt.Errorf("build healthcheck request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("healthcheck request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("healthcheck returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	return nil
 }

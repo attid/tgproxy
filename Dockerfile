@@ -13,4 +13,6 @@ COPY --from=builder /out/tgproxy /tgproxy
 
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD ["/tgproxy", "healthcheck"]
+
 ENTRYPOINT ["/tgproxy"]

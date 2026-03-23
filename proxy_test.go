@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -264,5 +265,51 @@ func TestConfigRejectsMissingAllowedBotIDs(t *testing.T) {
 
 	if _, err := loadConfigFromEnv(); err == nil {
 		t.Fatal("expected error for empty ALLOWED_BOT_IDS")
+	}
+}
+
+func TestRunHealthcheckOK(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	if err := runHealthcheck(server.URL + "/healthz"); err != nil {
+		t.Fatalf("expected healthcheck to pass, got %v", err)
+	}
+}
+
+func TestRunHealthcheckFailsOnNon200(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	if err := runHealthcheck(server.URL); err == nil {
+		t.Fatal("expected healthcheck error for non-200 status")
+	}
+}
+
+func TestHealthcheckURLFromEnv(t *testing.T) {
+	t.Setenv("HEALTHCHECK_URL", "http://127.0.0.1:9999/healthz")
+
+	if got := healthcheckURLFromEnv(); got != "http://127.0.0.1:9999/healthz" {
+		t.Fatalf("unexpected healthcheck url %q", got)
+	}
+}
+
+func TestHealthcheckURLFromEnvDefaults(t *testing.T) {
+	_ = os.Unsetenv("HEALTHCHECK_URL")
+
+	if got := healthcheckURLFromEnv(); got != "http://127.0.0.1:8080/healthz" {
+		t.Fatalf("unexpected default healthcheck url %q", got)
 	}
 }
